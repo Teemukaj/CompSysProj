@@ -154,6 +154,7 @@ Void sensorFxn(UArg arg0, UArg arg1) {
         //printf("MPU data x-gyro: %.2f\n", gx);
         //printf("MPU data y-gyro: %.2f\n", gy);
         //printf("MPU data z-gyro: %.2f\n", gz);
+        //Test comment
         // Sleep 100ms
         Task_sleep(100000 / Clock_tickPeriod);
         j++;
