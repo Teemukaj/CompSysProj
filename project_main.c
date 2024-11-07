@@ -303,7 +303,7 @@ Void moveTaskFxn(UArg arg0, UArg arg1) {
     //kääntöön liittyvistä asentomuutoksien kulmanopeuksista ei välitetä ainakaan tässä vaiheessa.
 
     //esimerkki data-taulukko testaamiseen liikkeestä x-akselin suhteen
-    struct mpu_sample_t samples[14] = {
+    struct mpu_sample_t samplesMove1[14] = {
        {2504086, {-0.01, -0.02, -1}, {-0.05, 2.82, -2.5}},
        {2514224, {-0.01, -0.03, -1}, {-0.11, 2.91, -2.54}},
        {2524362, {-0.01, -0.03, -0.99}, {-0.02, 2.94, -2.55}},
@@ -319,8 +319,9 @@ Void moveTaskFxn(UArg arg0, UArg arg1) {
        {2625749, {-0.01, -0.02, -1}, {-0.36, 2.35, -1.67}},
        {2635890, {-0.01, -0.03, -1}, {-0.18, 2.82, -2.59}},
     };
+
     //esimerkki data-taulukko testaamiseen liikkestä y-akselin suhteen
-    struct mpu_sample_t samples[12] = {
+    struct mpu_sample_t samplesMove2[12] = {
        {4045092, {-0.01, -0.03, -1}, {-0.13, 2.94, -2.5}},
        {4055233, {-0.01, -0.02, -1}, {-0.18, 2.91, -2.48}},
        {4065374, {-0.01, -0.03, -1}, {-0.25, 3, -2.61}},
@@ -336,7 +337,7 @@ Void moveTaskFxn(UArg arg0, UArg arg1) {
     };
 
     //esimerkki data-taulukko testaamiseen liikkestä z-akselin suhteen
-    struct mpu_sample_t samples[13] = {
+    struct mpu_sample_t samplesMove3[13] = {
        {4369517, {-0.01, -0.03, -1}, {0.07, 2.9, -2.62}},
        {4379655, {-0.01, -0.03, -0.99}, {-0.03, 2.94, -2.39}},
        {4389793, {-0.01, -0.03, -0.99}, {-0.05, 2.87, -2.43}},
