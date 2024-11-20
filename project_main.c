@@ -247,6 +247,26 @@ Void uartTaskFxn(UArg arg0, UArg arg1) {
 
 }
 
+// Funktio summerin kontrollointiin
+// TODO: Integrointi muuhun ohjelmaan
+Void buzzerController(char signal) {
+    if (signal == '.') {
+        // Piste: Lyhyt piippaus
+        PIN_setOutputValue(buzzerHandle, BUZZER_PIN, 1); // Summeri päälle
+        Task_sleep(DOT_DURATION * (1000 / Clock_tickPeriod));
+        PIN_setOutputValue(buzzerHandle, BUZZER_PIN, 0); // Summeri offille
+    } else if (signal == '-') {
+        // Viiva: Pitkä piippaus
+        PIN_setOutputValue(buzzerHandle, BUZZER_PIN, 1); // Summeri päälle
+        Task_sleep(LINE_DURATION * (1000 / Clock_tickPeriod));
+        PIN_setOutputValue(buzzerHandle, BUZZER_PIN, 0); // Summeri offille
+    } else if (signal == ' ') {
+        // Väli: "Hiljainen hetki"
+        PIN_setOutputValue(buzzerHandle, BUZZER_PIN, 0); // Varmistetaan, että summeri on offilla
+        Task_sleep(SPACE_DURATION * (1000 / Clock_tickPeriod));
+    }
+}
+
 Void MPUsensorFxn(UArg arg0, UArg arg1) {
 
     float accx, accy, accz, gyx, gyy, gyz;
