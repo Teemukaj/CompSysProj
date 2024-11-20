@@ -1,5 +1,7 @@
 /* C Standard library */
 #include <stdio.h>
+#include <string.h>
+#include <math.h>
 
 /* XDCtools files */
 #include <xdc/std.h>
@@ -21,41 +23,66 @@
 #include <ti/sysbios/BIOS.h>
 #include <ti/sysbios/knl/Clock.h>
 #include <ti/sysbios/knl/Task.h>
+#include <ti/sysbios/knl/Mailbox.h>
 #include <ti/drivers/I2C.h>
 #include <ti/drivers/i2c/I2CCC26XX.h>
 #include <ti/drivers/PIN.h>
 #include <ti/drivers/pin/PINCC26XX.h>
-#include "Board.h"
-#include "sensors/mpu9250.h"
-
-
 
 /* Board Header files */
 #include "Board.h"
 #include "sensors/opt3001.h"
 #include "sensors/mpu9250.h"
+#include "buzzer.h"
 
 /* Task */
 #define STACKSIZE 2048
+Char mainMenuTaskStack[STACKSIZE];
 Char sensorTaskStack[STACKSIZE];
 Char uartTaskStack[STACKSIZE];
 Char mpuTaskStack[STACKSIZE];
 Char moveTaskStack[STACKSIZE];
+Char communicationTaskStack[STACKSIZE];
 
-// JTKJ: Teht v  3. Tilakoneen esittely
-// JTKJ: Exercise 3. Definition of the state machine
-enum state { WAITING=1, DATA_READY };
+
+/* Function prototypes */ //Onko tarpeellista ?
+//void mainMenuTaskFxn(UArg arg0, UArg arg1);
+//void uartTaskFxn(UArg arg0, UArg arg1);
+//void moveTaskFxn(UArg arg0, UArg arg1);
+//void communicationTaskFxn(UArg arg0, UArg arg1);
+//void MPUsensorFxn(UArg arg0, UArg arg1);
+
+/* Morse koodin pituudet (ms) */
+#define DOT_DURATION     200000
+#define LINE_DURATION    800000
+#define SPACE_DURATION   1000000
+
+/* Alustetaan buzzer */
+//#define BUZZER_PIN  Board_BUZZER
+//static PIN_Handle buzzerHandle;
+//static PIN_State buzzerState;
+static PIN_Handle hBuzzer;
+static PIN_State sBuzzer;
+
+/* Alustetaan Mailbox taskien väliseen viestittelyyn */
+//typedef char msg_Buzzer;
+//Mailbox_Handle mail_Buzzer;
+
+
+/* Morse-koodin jaettu bufferi */ //Ei luultavasti tarvetta tälle
+//#define MORSE_CODE_BUFFER_SIZE 256
+//char morseCodeBuffer[MORSE_CODE_BUFFER_SIZE];
+//volatile int morseCodeWriteIndex = 0;
+
+//Tilakone
+enum state { WAITING=1, DATA_READY, SEND_DATA, BUZZER, SEND_UART };
 enum state programState = WAITING;
 
-// JTKJ: Teht v  3. Valoisuuden globaali muuttuja
-// JTKJ: Exercise 3. Global variable for ambient light
-double ambientLight = -1000.0;
-
 //MPU globaalit muuttujat ja alustukset
-
 // MPU power pin global variables
 static PIN_Handle hMpuPin;
 static PIN_State  MpuPinState;
+
 
 // MPU power pin
 static PIN_Config MpuPinConfig[] = {
@@ -88,8 +115,11 @@ struct mpu_sample_t {
     struct gyroscope_t gyro;  // Gyroskoopin tiedot (gx, gy, gz)
 };
 
-//Globaali muuttuja tallentamaan viimeisen havainnon indeksi
-int lastSample = 0;
+//Globaali muuttuja tallentamaan viimeisen havainnon indeksi taulukossa
+volatile int lastSample = 0;
+
+//globaali muuttuja havaitun liikkeen morse-arvolle (. tai - tai väli)
+char message = 'a';
 
 //Alustetaan taulukkoon arvot jotka vastaavat laitteen paikallaanoloa z-acc = -1.00 , muut arvot 0.00
 struct mpu_sample_t samples[20] = {
@@ -115,10 +145,6 @@ struct mpu_sample_t samples[20] = {
     {0, {0.00, 0.00, -1.00}, {0.00, 0.00, 0.00}},
 };
 
-
-// JTKJ: Teht v  1. Lis   painonappien RTOS-muuttujat ja alustus
-// JTKJ: Exercise 1. Add pins RTOS-variables and configuration here
-
 // RTOS:n globaalit muuttujat pinnien käyttöön
 static PIN_Handle buttonHandle;
 static PIN_State buttonState;
@@ -128,17 +154,28 @@ static PIN_State ledState;
 // Pinnien alustukset, molemmille pinneille oma konfiguraatio
 // Vakio BOARD_BUTTON_0 vastaa toista painonappia
 PIN_Config buttonConfig[] = {
-   Board_BUTTON0  | PIN_INPUT_EN | PIN_PULLUP | PIN_IRQ_NEGEDGE,
-   PIN_TERMINATE // Asetustaulukko lopetetaan aina tällä vakiolla
+    Board_BUTTON0  | PIN_INPUT_EN | PIN_PULLUP | PIN_IRQ_NEGEDGE,
+    PIN_TERMINATE // Asetustaulukko lopetetaan aina tällä vakiolla
 };
+
 
 // Vakio Board_LED0 vastaa toista lediä
-
 PIN_Config ledConfig[] = {
-   Board_LED0 | PIN_GPIO_OUTPUT_EN | PIN_GPIO_LOW | PIN_PUSHPULL | PIN_DRVSTR_MAX,
-   PIN_TERMINATE // Asetustaulukko lopetetaan aina tällä vakiolla
+    Board_LED0 | PIN_GPIO_OUTPUT_EN | PIN_GPIO_LOW | PIN_PUSHPULL | PIN_DRVSTR_MAX,
+    PIN_TERMINATE // Asetustaulukko lopetetaan aina tällä vakiolla
 };
 
+// Alustetaan buzzerin pin
+//PIN_Config buzzerConfig[] = {
+//    BUZZER_PIN | PIN_GPIO_OUTPUT_EN | PIN_GPIO_LOW | PIN_PUSHPULL | PIN_DRVSTR_MAX,
+//    PIN_TERMINATE
+//};
+
+PIN_Config cBuzzer[] = {
+  Board_BUZZER | PIN_GPIO_OUTPUT_EN | PIN_GPIO_LOW | PIN_PUSHPULL | PIN_DRVSTR_MAX,
+  PIN_TERMINATE
+};
+/* Ei enää tarvetta, poista ennen palautusta
 void buttonFxn(PIN_Handle handle, PIN_Id pinId) {
 
     // JTKJ: Teht v  1. Vilkuta jompaa kumpaa ledi
@@ -150,45 +187,64 @@ void buttonFxn(PIN_Handle handle, PIN_Id pinId) {
     pinValue = !pinValue;
     PIN_setOutputValue( ledHandle, Board_LED0, pinValue );
 
-
 }
+*/
 
 /* Task Functions */
 Void uartTaskFxn(UArg arg0, UArg arg1) {
 
-    /*
+    UART_Handle uart;
+    UART_Params uartParams;
     // JTKJ: Teht v  4. Lis   UARTin alustus: 9600,8n1
     // JTKJ: Exercise 4. Setup here UART connection as 9600,8n1
+    UART_Params_init(&uartParams);
+    uartParams.baudRate = 9600; // 9600 baud rate
+    uartParams.dataLength = UART_LEN_8; // 8
+    uartParams.parityType = UART_PAR_NONE; // n
+    uartParams.stopBits = UART_STOP_ONE; // 1
+
+    //Avataan UART
+    uart = UART_open(Board_UART0, &uartParams);
+    if (uart == NULL) {
+        System_abort("Error opening the UART");
+    }
 
     while (1) {
-
-        // JTKJ: Teht v  3. Kun tila on oikea, tulosta sensoridata merkkijonossa debug-ikkunaan
-        //       Muista tilamuutos
-        // JTKJ: Exercise 3. Print out sensor data as string to debug window if the state is correct
-        //       Remember to modify state
-        if (programState == DATA_READY)  {
-
-            char merkkijono[20];
-            sprintf(merkkijono,"%lf\n",ambientLight);
-            //System_printf(merkkijono);
-            System_printf("uart tulostus lux-arvo: %s\n",merkkijono);
-            //System_flush();
-
-            // Tilasiirtymä DATA_READY -> WAITING
-            programState= WAITING;
+        if (programState == SEND_UART)  {
+            char code[20];
+            if (message == '.') {
+                sprintf(code,".\r\n\0");
+                UART_write(uart, code, strlen(code)+1);
+                //Resetoidaan messagen arvo
+                message = 'a';
+                //Tilanvaihto
+                programState = WAITING;
+            } else if (message == '-') {
+                sprintf(code,"-\r\n\0");
+                UART_write(uart, code, strlen(code)+1);
+                //Resetoidaan messagen arvo
+                message = 'a';
+                //Tilanvaihto
+                programState = WAITING;
+            } else if (message == ' ') {
+                sprintf(code," \r\n\0");
+                UART_write(uart, code, strlen(code)+1);
+                //Resetoidaan messagen arvo
+                message = 'a';
+                //Tilanvaihto
+                programState = WAITING;
+            } else {
+                System_printf("Ei oikeaa merkkiä\n");
+                System_flush();
+                //Resetoidaan char message
+                message = 'a';
+                //Tilanvaihto
+                programState = WAITING;
+            }
         }
-
-        // JTKJ: Teht v  4. L het  sama merkkijono UARTilla
-        // JTKJ: Exercise 4. Send the same sensor data string with UART
-
-        // Just for sanity check for exercise, you can comment this out
-        //System_printf("uartTask\n");
-        //System_flush();
-
-        // Once per second, you can modify this (1000000 / Clock_tickPeriod) is equal to 1s)
-        Task_sleep(1000000 / Clock_tickPeriod);
+        Task_sleep(100000 / Clock_tickPeriod);
     }
-    */
+
 }
 
 Void MPUsensorFxn(UArg arg0, UArg arg1) {
@@ -230,47 +286,49 @@ Void MPUsensorFxn(UArg arg0, UArg arg1) {
     bool hasClockStarted = false;
     uint32_t tickStart = 0;
     bool takeSamples = true;
-    while (takeSamples) {
-        //Taulukossa on vain 20 jäsentä, joten aloita tallennus alusta kun mennään yli 20 havainnon
-        if(lastSample == 20) {
-            //takeSamples = false;
-            //System_printf("indeksi vaihdettu 20 -> 0 \n");
-            lastSample = 0;
-        }
+    int curSample = 0;
+    while (1) {
+             if(takeSamples && programState == WAITING) {
+            //Taulukossa on vain 20 jäsentä, joten aloita tallennus alusta kun mennään yli 20 havainnon
+            curSample = (lastSample + 1) % 20;
+            // MPU ask data
+            mpu9250_get_data(&i2cMPU, &accx, &accy, &accz, &gyx, &gyy, &gyz);
+            //char debug_str[80];
+            //uint32_t tickStart;
+            if(hasClockStarted == false) {
+                tickStart = Clock_getTicks();
+                hasClockStarted = true;
+            }
+            uint32_t currentTick = Clock_getTicks() - tickStart;
+            //Save data to the struct-array for each row j
+            //Acceleration
+            samples[curSample].accel.ax = accx;
+            samples[curSample].accel.ay = accy;
+            samples[curSample].accel.az = accz;
+            //Gyro
+            samples[curSample].gyro.gx = gyx;
+            samples[curSample].gyro.gy = gyy;
+            samples[curSample].gyro.gz = gyz;
+            //Timestamp
+            samples[curSample].timestamp = currentTick;
+            //uint32_t currentTick = Clock_getTicks();
+            //sprintf(debug_str,"tick:%u, x:%.2f, y:%.2f, z:%.2f, gx:%.2f, gy:%.2f, gz:%.2f\n",currentTick, accx,accy,accz, gyx, gyy, gyz);
+            //sprintf(debug_str,"%u, %.2f, %.2f, %.2f, %.2f, %.2f, %.2f\n",currentTick, accx,accy,accz, gyx, gyy, gyz);
+            //System_printf(debug_str);
+            //System_flush();
+            //printf("MPU data x-acc: %.2f\n", ax);
+            //printf("MPU data y-acc: %.2f\n", ay);
+            //printf("MPU data z-acc: %.2f\n", az);
+            //printf("MPU data x-gyro: %.2f\n", gx);
+            //printf("MPU data y-gyro: %.2f\n", gy);
+            //printf("MPU data z-gyro: %.2f\n", gz);
+            lastSample = curSample;
+            programState = DATA_READY;
 
-        // MPU ask data
-        mpu9250_get_data(&i2cMPU, &accx, &accy, &accz, &gyx, &gyy, &gyz);
-        char debug_str[80];
-        //uint32_t tickStart;
-        if(hasClockStarted == false) {
-            tickStart = Clock_getTicks();
-            hasClockStarted = true;
+
         }
-        uint32_t currentTick = Clock_getTicks() - tickStart;
-        //Save data to the struct-array for each row j
-        //Acceleration
-        samples[lastSample].accel.ax = accx;
-        samples[lastSample].accel.ay = accy;
-        samples[lastSample].accel.az = accz;
-        //Gyro
-        samples[lastSample].gyro.gx = gyx;
-        samples[lastSample].gyro.gy = gyy;
-        samples[lastSample].gyro.gz = gyz;
-        //Timestamp
-        samples[lastSample].timestamp = currentTick;
-        //uint32_t currentTick = Clock_getTicks();
-        //sprintf(debug_str,"tick:%u, x:%.2f, y:%.2f, z:%.2f, gx:%.2f, gy:%.2f, gz:%.2f\n",currentTick, accx,accy,accz, gyx, gyy, gyz);
-        sprintf(debug_str,"%u, %.2f, %.2f, %.2f, %.2f, %.2f, %.2f\n",currentTick, accx,accy,accz, gyx, gyy, gyz);
-        System_printf(debug_str);
-        //printf("MPU data x-acc: %.2f\n", ax);
-        //printf("MPU data y-acc: %.2f\n", ay);
-        //printf("MPU data z-acc: %.2f\n", az);
-        //printf("MPU data x-gyro: %.2f\n", gx);
-        //printf("MPU data y-gyro: %.2f\n", gy);
-        //printf("MPU data z-gyro: %.2f\n", gz);
-        // Sleep 100ms
-        Task_sleep(100000 / Clock_tickPeriod);
-        lastSample++;
+             // Sleep 100ms
+             Task_sleep(100000 / Clock_tickPeriod);
     }
     /*
     //printtaus taulukosta
@@ -292,68 +350,153 @@ Void MPUsensorFxn(UArg arg0, UArg arg1) {
 }
 
 Void moveTaskFxn(UArg arg0, UArg arg1) {
+    const float DEADZONE = 0.3; // kynnys (deadzone) erotukselle, jotta se voidaan tunnistaa liikkeeksi.
+    const float ELIMIT = 0.1; // raja-arvo muiden akselien suhteen tapahtuvalle liikkeelle
 
-    //TODO: Liikkentunnistus-taskin koodi
-    //liikedata structista samples[20], 20 viimeistä havaintoa ~100ms välein
-    //data: samples[i].timestamp, samples[i].accel.ax, samples[i].accel.ay, samples[i].accel.az, samples[i].gyro.gx, samples[i].gyro.gy, samples[i].gyro.gz)
-    //Viimeisen havainnon indeksi lastSample. 20 viimeistä havaintoa, indeksi pyörähtää 20->0 aina kun 20 havaintoa tulee täyteen
-    //Täytyy toteuttaa jonkinlainen tilakoneen tilaehto, esim tarkistetaan vain kun on uutta dataa tjmts, voi jättää tehtäväksi myöhemmäksi
-    //3 liikettä: ylös-alas liike suuntiin x,y ja z-akseli. Varmaan olisi hyvä valita kynnysarvo ja tarkistetaan aika
-    //kuin nopeasti liike on tehtävä. Esim x-akselin suuntaan kiihtyvyysarvot voisivat mennä 0, 0.25, -0.15, -0.01, 0.02
-    //kääntöön liittyvistä asentomuutoksien kulmanopeuksista ei välitetä ainakaan tässä vaiheessa.
+    while (1) {
+        if(programState == DATA_READY) {
+            //Viimeisen ja sitä edellisen havainnon indeksi
+            int currentSample = lastSample;
+            int previousSample = (lastSample + 20 - 1) % 20;
+            //bool liike_x = false, liike_y = false, liike_z = false;
 
-    //esimerkki data-taulukko testaamiseen liikkeestä x-akselin suhteen
-    struct mpu_sample_t samplesMove1[14] = {
-       {2504086, {-0.01, -0.02, -1}, {-0.05, 2.82, -2.5}},
-       {2514224, {-0.01, -0.03, -1}, {-0.11, 2.91, -2.54}},
-       {2524362, {-0.01, -0.03, -0.99}, {-0.02, 2.94, -2.55}},
-       {2534500, {-0.01, -0.03, -1}, {-0.11, 2.86, -2.43}},
-       {2544644, {-0.01, -0.03, -1}, {-0.11, 2.85, -2.49}},
-       {2554782, {-0.01, -0.03, -1}, {1.96, 2.66, 22.48}},
-       {2564923, {0.48, -0.01, -1.03}, {-1.59, 3.84, -17.78}},
-       {2575064, {-0.38, -0.07, -1.01}, {-0.22, 3.18, 14.23}},
-       {2585199, {-0.01, -0.03, -1}, {-0.12, 2.94, -2.56}},
-       {2595335, {-0.01, -0.03, -1}, {-0.13, 2.96, -2.6}},
-       {2605473, {-0.01, -0.02, -1}, {-0.18, 3, -2.59}},
-       {2615611, {-0.01, -0.02, -1}, {-0.05, 2.8, 0.5}},
-       {2625749, {-0.01, -0.02, -1}, {-0.36, 2.35, -1.67}},
-       {2635890, {-0.01, -0.03, -1}, {-0.18, 2.82, -2.59}},
-    };
+            //System_printf("Data kerätty, yritetään havaita liikettä liikettä\n");
+            //System_flush();
+            //System_printf("nykyinen indeksi: %d\n, edellinen indeksi: %d\n,", currentSample, previousSample);
+            // Liikkeen tunnistuksen logiikka. Lasketaan delta(x,y,z) eli peräkkäisten näytteiden kiihtyvyyden ero. Mikäli se ylittää kynnyksen
+            // (deadzone) ja muiden akselien suhteen liike on tarpeeksi pientä niin tunnistetaan se liikkeeksi x,y,z.
+            float delta_X = samples[currentSample].accel.ax - samples[previousSample].accel.ax;
+            float delta_Y = samples[currentSample].accel.ay - samples[previousSample].accel.ay;
+            float delta_Z = samples[currentSample].accel.az - samples[previousSample].accel.az;
 
-    //esimerkki data-taulukko testaamiseen liikkestä y-akselin suhteen
-    struct mpu_sample_t samplesMove2[12] = {
-       {4045092, {-0.01, -0.03, -1}, {-0.13, 2.94, -2.5}},
-       {4055233, {-0.01, -0.02, -1}, {-0.18, 2.91, -2.48}},
-       {4065374, {-0.01, -0.03, -1}, {-0.25, 3, -2.61}},
-       {4075512, {-0.01, -0.02, -1}, {-0.19, 3.08, -1.69}},
-       {4085653, {-0.01, -0.02, -1}, {1.15, 0.35, -6.6}},
-       {4095788, {0.05, 0.61, -1.01}, {-3.59, -0.18, -25.7}},
-       {4105923, {-0.1, -0.6, -0.99}, {-0.14, 2.89, -2.5}},
-       {4116061, {-0.02, -0.02, -1}, {-0.11, 2.96, -2.47}},
-       {4126200, {-0.02, -0.03, -1}, {-0.08, 3.01, -2.58}},
-       {4136338, {-0.02, -0.02, -0.99}, {-0.04, 2.91, -2.56}},
-       {4146476, {-0.01, -0.02, -1}, {-0.14, 2.96, -2.59}},
-       {4156617, {-0.01, -0.02, -1}, {-0.08, 2.9, -2.55}},
-    };
+            if (delta_X > DEADZONE && fabs(delta_Y) < ELIMIT && fabs(delta_Z) < ELIMIT) {
+                //liike_x = true;
+                System_printf("Liike positiiviseen suuntaan x-akselilla\n");
+                System_flush();
+                // Tallennetaan '-' globaalin muuttujaan ja tilamuutos
+                message = '-';
+                //Nollataan kiihtyvyysarvot currentSample-indeksissä alkuarvoon
+                samples[currentSample].accel.ax = 0;
+                samples[currentSample].accel.ay = 0;
+                samples[currentSample].accel.az = -1.0;
+                programState = BUZZER;
+            } else if (delta_Y > DEADZONE && fabs(delta_X) < ELIMIT && fabs(delta_Z) < ELIMIT) {
+                //liike_y = true;
+                System_printf("Liike positiiviseen suuntaan y-akselilla\n");
+                System_flush();
+                // Tallennetaan '.' globaalin muuttujaan ja tilamuutos
+                message = '.';
+                //Nollataan kiihtyvyysarvot currentSample-indeksissä alkuarvoon
+                samples[currentSample].accel.ax = 0;
+                samples[currentSample].accel.ay = 0;
+                samples[currentSample].accel.az = -1.0;
+                programState = BUZZER;
+            } else if (delta_Z > (DEADZONE + 0.1) && fabs(delta_X) < (ELIMIT + 0.1) && fabs(delta_Y) < (ELIMIT + 0.1)) {
+                //liike_z = true;
+                System_printf("Liike positiiviseen suuntaan z-akselilla\n");
+                System_flush();
+                // Tallennetaan ' ' globaalin muuttujaan ja tilamuutos
+                message = ' ';
+                //Nollataan kiihtyvyysarvot currentSample-indeksissä alkuarvoon
+                samples[currentSample].accel.ax = 0;
+                samples[currentSample].accel.ay = 0;
+                samples[currentSample].accel.az = -1.0;
+                programState = BUZZER;
+            } else {
+                programState = WAITING;
+            }
+        //programState = WAITING;
+        }
+        //Pienempi sleep niin tarkistetaan useammin kuin dataa kerätään
+        Task_sleep(50000 / Clock_tickPeriod);
+    }
+}
 
-    //esimerkki data-taulukko testaamiseen liikkestä z-akselin suhteen
-    struct mpu_sample_t samplesMove3[13] = {
-       {4369517, {-0.01, -0.03, -1}, {0.07, 2.9, -2.62}},
-       {4379655, {-0.01, -0.03, -0.99}, {-0.03, 2.94, -2.39}},
-       {4389793, {-0.01, -0.03, -0.99}, {-0.05, 2.87, -2.43}},
-       {4399934, {-0.01, -0.03, -1}, {0, 2.98, -2.5}},
-       {4410069, {-0.01, -0.03, -1}, {-2.37, 2.17, 0.38}},
-       {4420204, {-0.02, -0.04, -1.02}, {-99.31, 16.36, 11.01}},
-       {4430343, {0.01, 0.24, -0.3}, {86.5, 30.68, -3.46}},
-       {4440481, {0.13, 0.07, -1.57}, {0.5, 2.52, -2.76}},
-       {4450625, {0.01, -0.03, -1}, {-0.01, 3.23, -1.96}},
-       {4460766, {0.01, -0.03, -1}, {0.21, 2.02, -2.96}},
-       {4470904, {0, -0.03, -1}, {-0.12, 3.27, -2.49}},
-       {4481045, {0, -0.02, -1}, {-0.11, 3.4, -2.6}},
-       {4491180, {0, -0.02, -1}, {-0.18, 3.73, -2.31}},
-    };
+Void mainMenuTaskFxn(UArg arg0, UArg arg1) {
+    //char userInput;
 
+    while (1) {
+        //System_printf("=== Main Menu ===\n");
+        Task_sleep(100000 / Clock_tickPeriod);
 
+    }
+}
+
+void communicationTaskFxn(UArg arg0, UArg arg1) {
+    //Toteutus
+    while (1) {
+        if(programState == BUZZER) {
+            System_printf("CommunicationTask toteutus\n");
+            System_flush();
+            if (message == '.') {
+                // Piste: Lyhyt piippaus ja LED välähdys
+                System_printf("Piste\n");
+                System_flush();
+                // Summeri ja LED päälle
+                buzzerOpen(hBuzzer);
+                buzzerSetFrequency(2000);
+                //PIN_setOutputValue(buzzerHandle, BUZZER_PIN, 1);
+                PIN_setOutputValue(ledHandle, Board_LED0, 1);
+
+                // Odotetaan hetki
+                Task_sleep(DOT_DURATION / Clock_tickPeriod);
+
+                // Sammutetaan summeri ja LED
+                //PIN_setOutputValue(buzzerHandle, BUZZER_PIN, 0);
+                buzzerClose();
+                PIN_setOutputValue(ledHandle, Board_LED0, 0);
+                //Tilanvaihto
+                programState = SEND_UART;
+            } else if (message == '-') {
+                // Viiva: Pitkä piippaus ja LED välähdys
+                System_printf("Viiva\n");
+                System_flush();
+                // Summeri ja LED päälle
+                buzzerOpen(hBuzzer);
+                buzzerSetFrequency(2000);
+                //PIN_setOutputValue(buzzerHandle, BUZZER_PIN, 1);
+                PIN_setOutputValue(ledHandle, Board_LED0, 1);
+
+                // Odotetaan hetki
+                Task_sleep(LINE_DURATION / Clock_tickPeriod);
+
+                // Sammutetaan summeri ja LED
+                buzzerClose();
+                //PIN_setOutputValue(buzzerHandle, BUZZER_PIN, 0);
+                PIN_setOutputValue(ledHandle, Board_LED0, 0);
+                //Tilanvaihto
+                programState = SEND_UART;
+            } else if (message == ' ') {
+                // Väli: Pitkä piippaus korkeammalla taajuudella
+                System_printf("Välilyönti\n");
+                System_flush();
+                // Summeri ja LED päälle
+                buzzerOpen(hBuzzer);
+                buzzerSetFrequency(5000);
+                //PIN_setOutputValue(buzzerHandle, BUZZER_PIN, 1);
+                PIN_setOutputValue(ledHandle, Board_LED0, 1);
+
+                // Odotetaan hetki
+                Task_sleep(SPACE_DURATION / Clock_tickPeriod);
+
+                // Sammutetaan summeri ja LED
+                buzzerClose();
+                //PIN_setOutputValue(buzzerHandle, BUZZER_PIN, 0);
+                PIN_setOutputValue(ledHandle, Board_LED0, 0);
+                //Tilanvaihto
+                programState = SEND_UART;
+            } else {
+                System_printf("Ei oikeaa merkkiä\n");
+                System_flush();
+                //Resetoidaan char message
+                message = 'a';
+                //Tilanvaihto
+                programState = WAITING;
+            }
+        }
+        //Sleep 1000ms
+        Task_sleep(100000 / Clock_tickPeriod);
+    }
 }
 
 Int main(void) {
@@ -367,6 +510,10 @@ Int main(void) {
     Task_Params mpuTaskParams;
     Task_Handle moveTaskHandle;
     Task_Params moveTaskParams;
+    Task_Handle communicationTaskHandle;
+    Task_Params communicationTaskParams;
+    Task_Handle mainMenuTaskHandle;
+    Task_Params mainMenuTaskParams;
 
     // Initialize board
     Board_initGeneral();
@@ -381,16 +528,17 @@ Int main(void) {
        System_abort("Error initializing LED pins\n");
     }
 
-    // Asetetaan painonappi-pinnille keskeytyksen käsittelijäksi
+    // Asetetaan painonappi-pinnille keskeytyksen käsittelijäksi, EI käytössä
     // funktio buttonFxn
-    if (PIN_registerIntCb(buttonHandle, &buttonFxn) != 0) {
-       System_abort("Error registering button callback function");
-    }
+    //if (PIN_registerIntCb(buttonHandle, &buttonFxn) != 0) {
+    //   System_abort("Error registering button callback function");
+    //}
     // JTKJ: Teht v  2. Ota i2c-v yl  k ytt  n ohjelmassa
     // JTKJ: Exercise 2. Initialize i2c bus
     Board_initI2C();
     // JTKJ: Teht v  4. Ota UART k ytt  n ohjelmassa
     // JTKJ: Exercise 4. Initialize UART
+    Board_initUART();
 
     // JTKJ: Teht v  1. Ota painonappi ja ledi ohjelman k ytt  n
     //       Muista rekister id  keskeytyksen k sittelij  painonapille
@@ -403,20 +551,43 @@ Int main(void) {
         System_abort("Pin open failed!");
     }
 
+    // Open buzzer pin
+    //buzzerHandle = PIN_open(&buzzerState, buzzerConfig);
+    //if (!buzzerHandle) {
+    //    System_abort("Error initializing buzzer pin\n");
+    //}
+
+    // Buzzer
+    hBuzzer = PIN_open(&sBuzzer, cBuzzer);
+    if (hBuzzer == NULL) {
+      System_abort("Pin open failed!");
+    }
+
+    // Mailbox buzzerTaskFxn
+    /*
+    Mailbox_Params mboxParams;
+    Mailbox_Params_init(&mboxParams);
+    mail_Buzzer = Mailbox_create(sizeof(msg_Buzzer), 10, &mboxParams, NULL);
+    if (mail_Buzzer == NULL) {
+        System_abort("Mailbox create failed!");
+    }
+    */
+
+    /* Task Initializations */
+
     Task_Params_init(&mpuTaskParams);
     mpuTaskParams.stackSize = STACKSIZE;
     mpuTaskParams.stack = &mpuTaskStack;
+    mpuTaskParams.priority=2;
     mpuTask = Task_create((Task_FuncPtr)MPUsensorFxn, &mpuTaskParams, NULL);
     if (mpuTask == NULL) {
         System_abort("Task create failed!");
     }
 
-    /* Task */
-
     Task_Params_init(&moveTaskParams);
     moveTaskParams.stackSize = STACKSIZE;
     moveTaskParams.stack = &moveTaskStack;
-    moveTaskParams.priority=2;
+    moveTaskParams.priority=1;
     moveTaskHandle = Task_create(moveTaskFxn, &moveTaskParams, NULL);
     if (moveTaskHandle == NULL) {
         System_abort("Task create failed!");
@@ -428,6 +599,24 @@ Int main(void) {
     uartTaskParams.priority=2;
     uartTaskHandle = Task_create(uartTaskFxn, &uartTaskParams, NULL);
     if (uartTaskHandle == NULL) {
+        System_abort("Task create failed!");
+    }
+
+    Task_Params_init(&communicationTaskParams);
+    communicationTaskParams.stackSize = STACKSIZE;
+    communicationTaskParams.stack = &communicationTaskStack;
+    communicationTaskParams.priority=2;
+    communicationTaskHandle = Task_create(communicationTaskFxn, &communicationTaskParams, NULL);
+    if (communicationTaskHandle == NULL) {
+        System_abort("Task create failed!");
+    }
+
+    Task_Params_init(&mainMenuTaskParams);
+    mainMenuTaskParams.stackSize = STACKSIZE;
+    mainMenuTaskParams.stack = &mainMenuTaskStack;
+    mainMenuTaskParams.priority = 2;
+    mainMenuTaskHandle = Task_create(mainMenuTaskFxn, &mainMenuTaskParams, NULL);
+    if (mainMenuTaskHandle == NULL) {
         System_abort("Task create failed!");
     }
 
