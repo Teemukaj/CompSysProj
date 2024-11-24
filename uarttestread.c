@@ -49,23 +49,77 @@ Void uartTaskFxn(UArg arg0, UArg arg1) {
         System_abort("Error opening the UART");
     }
 
-    // Lähetetään sana "aasi" Morse-koodattuna
+    char input;
+    char echo_msg[30];
     char message[20];
+    char tallennus[100];
+    sprintf(message,"-\r\n\0");
+    System_printf("viestin odotettu pituus: %d\n", strlen(message)+1);
+    System_flush();
+    System_printf("odotettu viesti: %s\n", message);
+    System_flush();
+    int i = 0;
+    int j = 0;
+    // Ikuinen elämä
+    //test string: 'hello' => `encode('hello')` => `[['.', '.', '.', '.'],['.'],['.', '-', '.', '.'],['.', '-', '.', '.'],['-', '-', '-']]`
+    // in total 16 merkkiä, eli indeksittäin 48kpl
+    while (i < 48) {
+
+       // Vastaanotetaan 1 merkki kerrallaan input-muuttujaan
+       UART_read(uart, &input, 1);
+
+       // Lähetetään merkkijono takaisin
+       sprintf(echo_msg,"Received: %c\n",input);
+       //System_printf("saatu viesti: %c\n", input);
+       //System_flush();
+       //System_printf("indeksi: %d\n", i);
+       //System_flush();
+       //UART_write(uart, echo_msg, strlen(echo_msg)+1);
+       ///tallennetaan muistiin jos indeksi on kolmella jaollinen(jakojäännös %3 = 0)
+       //int j = 0;
+       if( (i % 3) == 0 ) {
+           tallennus[j] = input;
+           System_printf("tallennettu merkki %c\n", tallennus[j]);
+           System_flush();
+           j++;
+       }
+       //System_printf("tallennettu viesti: %s\n", tallennus);
+       // Luku ei onnistunut liian pitkillä sleepin arvoilla, jopa 100ms aiheutti viestin katkeamisen
+       //Task_sleep(10000 / Clock_tickPeriod);
+       i++;
+    }
+    int k = 0;
+    do {
+      printf("Tallennettu merkki; %c\n", tallennus[k]);
+      k++;
+    }
+    while (k < j);
+
+    /*
+    // Lähetetään sana "aasi" Morse-koodattuna
+    //char message[20];
     // a: .-
     sprintf(message,".\r\n\0");
     UART_write(uart, message, strlen(message)+1);
+    Task_sleep(100000 / Clock_tickPeriod);  // Pieni viive viestien välillä
     sprintf(message,"-\r\n\0");
     UART_write(uart, message, strlen(message)+1);
+    Task_sleep(100000 / Clock_tickPeriod);  // Pieni viive viestien välillä
     sprintf(message," \r\n\0");
     UART_write(uart, message, strlen(message)+1);
+    Task_sleep(100000 / Clock_tickPeriod);  // Pieni viive viestien välillä
     // a: .-
     sprintf(message,".\r\n\0");
     UART_write(uart, message, strlen(message)+1);
+    Task_sleep(100000 / Clock_tickPeriod);  // Pieni viive viestien välillä
     sprintf(message,"-\r\n\0");
     UART_write(uart, message, strlen(message)+1);
+    Task_sleep(100000 / Clock_tickPeriod);  // Pieni viive viestien välillä
     sprintf(message," \r\n\0");
     UART_write(uart, message, strlen(message)+1);
+    Task_sleep(100000 / Clock_tickPeriod);  // Pieni viive viestien välillä
     // s: ...
+
     sprintf(message,".\r\n\0");
     UART_write(uart, message, strlen(message)+1);
     sprintf(message,".\r\n\0");
@@ -86,6 +140,7 @@ Void uartTaskFxn(UArg arg0, UArg arg1) {
     UART_write(uart, message, strlen(message)+1);
     sprintf(message," \r\n\0");
     UART_write(uart, message, strlen(message)+1);
+    */
     /*
     sendToUART(".\r\n\0");  // a: .-
     sendToUART("-\r\n\0");

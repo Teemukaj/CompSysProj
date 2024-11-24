@@ -1,3 +1,8 @@
+//Tietokonejärjestelmät ryhmätyö: Salaiset viestit
+//Teemu Kajava: uartTaskFxn, MPUsensorFxn, yleinen testaus
+//Valtteri Piippo: moveTaskFxn, main
+//Niko Siltala: menuTaskFxn, communicationTaskFxn, button0Fxn, button1Fxn
+
 /* C Standard library */
 #include <stdio.h>
 #include <string.h>
@@ -18,20 +23,10 @@
 #include <ti/drivers/power/PowerCC26XX.h>
 #include <ti/drivers/UART.h>
 #include <ti/drivers/i2c/I2CCC26XX.h>
-#include <xdc/std.h>
-#include <xdc/runtime/System.h>
-#include <ti/sysbios/BIOS.h>
-#include <ti/sysbios/knl/Clock.h>
-#include <ti/sysbios/knl/Task.h>
-#include <ti/sysbios/knl/Mailbox.h>
-#include <ti/drivers/I2C.h>
-#include <ti/drivers/i2c/I2CCC26XX.h>
-#include <ti/drivers/PIN.h>
-#include <ti/drivers/pin/PINCC26XX.h>
+//#include <ti/sysbios/knl/Mailbox.h>
 
 /* Board Header files */
 #include "Board.h"
-#include "sensors/opt3001.h"
 #include "sensors/mpu9250.h"
 #include "buzzer.h"
 
@@ -44,45 +39,23 @@ Char mpuTaskStack[STACKSIZE];
 Char moveTaskStack[STACKSIZE];
 Char communicationTaskStack[STACKSIZE];
 
-
-/* Function prototypes */ //Onko tarpeellista ?
-//void mainMenuTaskFxn(UArg arg0, UArg arg1);
-//void uartTaskFxn(UArg arg0, UArg arg1);
-//void moveTaskFxn(UArg arg0, UArg arg1);
-//void communicationTaskFxn(UArg arg0, UArg arg1);
-//void MPUsensorFxn(UArg arg0, UArg arg1);
-
 /* Morse koodin pituudet (ms) */
-#define DOT_DURATION     200000
-#define LINE_DURATION    800000
-#define SPACE_DURATION   1000000
+#define DOT_DURATION     100000
+#define LINE_DURATION    300000
+#define SPACE_DURATION   600000
 
 /* Alustetaan buzzer */
-//#define BUZZER_PIN  Board_BUZZER
-//static PIN_Handle buzzerHandle;
-//static PIN_State buzzerState;
 static PIN_Handle hBuzzer;
 static PIN_State sBuzzer;
 
-/* Alustetaan Mailbox taskien väliseen viestittelyyn */
-//typedef char msg_Buzzer;
-//Mailbox_Handle mail_Buzzer;
-
-
-/* Morse-koodin jaettu bufferi */ //Ei luultavasti tarvetta tälle
-//#define MORSE_CODE_BUFFER_SIZE 256
-//char morseCodeBuffer[MORSE_CODE_BUFFER_SIZE];
-//volatile int morseCodeWriteIndex = 0;
-
-//Tilakone
-enum state { WAITING=1, DATA_READY, SEND_DATA, BUZZER, SEND_UART };
-enum state programState = WAITING;
+//Tilakone, aloitetaan MENU-tilasta
+enum state { WAITING=1, MENU, DATA_READY, SEND_DATA, BUZZER, SEND_UART, READ_UART, BUZZER_READ };
+enum state programState = MENU;
 
 //MPU globaalit muuttujat ja alustukset
 // MPU power pin global variables
 static PIN_Handle hMpuPin;
 static PIN_State  MpuPinState;
-
 
 // MPU power pin
 static PIN_Config MpuPinConfig[] = {
@@ -115,10 +88,10 @@ struct mpu_sample_t {
     struct gyroscope_t gyro;  // Gyroskoopin tiedot (gx, gy, gz)
 };
 
-//Globaali muuttuja tallentamaan viimeisen havainnon indeksi taulukossa
-volatile int lastSample = 0;
+//Globaali muuttuja välittämään viimeisen havainnon indeksi taulukossa taskien välillä
+int lastSample = 0;
 
-//globaali muuttuja havaitun liikkeen morse-arvolle (. tai - tai väli)
+//globaali muuttuja välittämään merkin(. - tai väli) taskien välille
 char message = 'a';
 
 //Alustetaan taulukkoon arvot jotka vastaavat laitteen paikallaanoloa z-acc = -1.00 , muut arvot 0.00
@@ -146,57 +119,117 @@ struct mpu_sample_t samples[20] = {
 };
 
 // RTOS:n globaalit muuttujat pinnien käyttöön
-static PIN_Handle buttonHandle;
-static PIN_State buttonState;
-static PIN_Handle ledHandle;
-static PIN_State ledState;
+static PIN_Handle button0Handle;
+static PIN_State button0State;
+static PIN_Handle button1Handle;
+static PIN_State button1State;
+static PIN_Handle led0Handle;
+static PIN_State led0State;
+static PIN_Handle led1Handle;
+static PIN_State led1State;
 
-// Pinnien alustukset, molemmille pinneille oma konfiguraatio
+// Pinnien alustukset
 // Vakio BOARD_BUTTON_0 vastaa toista painonappia
-PIN_Config buttonConfig[] = {
-    Board_BUTTON0  | PIN_INPUT_EN | PIN_PULLUP | PIN_IRQ_NEGEDGE,
-    PIN_TERMINATE // Asetustaulukko lopetetaan aina tällä vakiolla
+PIN_Config button0Config[] = {
+   Board_BUTTON0  | PIN_INPUT_EN | PIN_PULLUP | PIN_IRQ_NEGEDGE,
+   PIN_TERMINATE // Asetustaulukko lopetetaan aina tällä vakiolla
 };
 
+PIN_Config button1Config[] = {
+   Board_BUTTON1  | PIN_INPUT_EN | PIN_PULLUP | PIN_IRQ_NEGEDGE,
+   PIN_TERMINATE // Asetustaulukko lopetetaan aina tällä vakiolla
+};
 
 // Vakio Board_LED0 vastaa toista lediä
-PIN_Config ledConfig[] = {
-    Board_LED0 | PIN_GPIO_OUTPUT_EN | PIN_GPIO_LOW | PIN_PUSHPULL | PIN_DRVSTR_MAX,
-    PIN_TERMINATE // Asetustaulukko lopetetaan aina tällä vakiolla
+PIN_Config led0Config[] = {
+   Board_LED0 | PIN_GPIO_OUTPUT_EN | PIN_GPIO_LOW | PIN_PUSHPULL | PIN_DRVSTR_MAX,
+   PIN_TERMINATE // Asetustaulukko lopetetaan aina tällä vakiolla
+};
+
+// Vakio Board_LED1 vastaa toista lediä
+PIN_Config led1Config[] = {
+   Board_LED1 | PIN_GPIO_OUTPUT_EN | PIN_GPIO_LOW | PIN_PUSHPULL | PIN_DRVSTR_MAX,
+   PIN_TERMINATE // Asetustaulukko lopetetaan aina tällä vakiolla
 };
 
 // Alustetaan buzzerin pin
-//PIN_Config buzzerConfig[] = {
-//    BUZZER_PIN | PIN_GPIO_OUTPUT_EN | PIN_GPIO_LOW | PIN_PUSHPULL | PIN_DRVSTR_MAX,
-//    PIN_TERMINATE
-//};
-
 PIN_Config cBuzzer[] = {
   Board_BUZZER | PIN_GPIO_OUTPUT_EN | PIN_GPIO_LOW | PIN_PUSHPULL | PIN_DRVSTR_MAX,
   PIN_TERMINATE
 };
-/* Ei enää tarvetta, poista ennen palautusta
-void buttonFxn(PIN_Handle handle, PIN_Id pinId) {
 
-    // JTKJ: Teht v  1. Vilkuta jompaa kumpaa ledi
-    // JTKJ: Exercise 1. Blink either led of the device
+// Button0 keskeytyksen käsittelijäfunktio
 
+void button0Fxn(PIN_Handle handle, PIN_Id pinId) {
+    //programState vaihto MENU -> READ_UART tai READ_UART - > MENU
+    if(programState == MENU) {
+        System_printf("Siirrytään READ_UART-tilaan.\n");
+        System_flush();
+        //LED1 päälle
+        PIN_setOutputValue( led1Handle, Board_LED1, 1 );
+        programState = READ_UART;
+    }else if(programState == READ_UART) {
+        System_printf("Siirrytään MENU-tilaan.\n");
+        System_flush();
+        //LED1 pois
+        PIN_setOutputValue( led1Handle, Board_LED1, 0 );
+        programState = MENU;
+    }else {
+        System_printf("Odota paluuta READ_UART-tilaan ja paina nappia uudestaan\n");
+        System_flush();
+    }
+    }
+
+// Button1 keskeytyksen käsittelijäfunktio
+void button1Fxn(PIN_Handle handle, PIN_Id pinId) {
 
     // Vaihdetaan led-pinnin tilaa negaatiolla
-    uint_t pinValue = PIN_getOutputValue( Board_LED0 );
-    pinValue = !pinValue;
-    PIN_setOutputValue( ledHandle, Board_LED0, pinValue );
-
+    //uint_t pinValue = PIN_getOutputValue( Board_LED1 );
+    //pinValue = !pinValue;
+    //PIN_setOutputValue( led1Handle, Board_LED1, pinValue );
+    //programState vaihto MENU -> WAITING tai WAITING - > MENU
+    if(programState == MENU) {
+        System_printf("Siirrytään SEND_DATA-tilaan.\n");
+        System_flush();
+        //LED1 päälle
+        PIN_setOutputValue( led1Handle, Board_LED1, 1 );
+        programState = WAITING;
+    }else if(programState == WAITING) {
+        System_printf("Siirrytään MENU-tilaan.\n");
+        System_flush();
+        //LED1 pois
+        PIN_setOutputValue( led1Handle, Board_LED1, 0 );
+        programState = MENU;
+   }else {
+        System_printf("Odota paluuta WAITING-tilaan ja paina nappia uudestaan\n");
+        System_flush();
+   }
 }
-*/
 
 /* Task Functions */
+
+void menuTaskFxn(UArg arg0, UArg arg1) {
+    //Sleep 8s aloituksessa niin ei tulostu alustusviestien sekaan
+    Task_sleep(8000000 / Clock_tickPeriod);
+    while (1) {
+        if(programState == MENU) {
+            //MENU-tilan ohjeiden tulostus konsoliin
+            System_printf("Paina nappia 0 koodin vastaanottoon. Paina nappia 1 liikkeiden tunnistukseen laitteelta.\n");
+            System_flush();
+            System_printf("LED1(punainen) palaa jos suoritus on käynnissä.\n");
+            System_flush();
+            System_printf("Palaa valikkoon painamalla nappia uudestaan.\n");
+            System_flush();
+        }
+        //Sleep 10s
+        Task_sleep(10000000 / Clock_tickPeriod);
+    }
+}
+
 Void uartTaskFxn(UArg arg0, UArg arg1) {
 
     UART_Handle uart;
     UART_Params uartParams;
-    // JTKJ: Teht v  4. Lis   UARTin alustus: 9600,8n1
-    // JTKJ: Exercise 4. Setup here UART connection as 9600,8n1
     UART_Params_init(&uartParams);
     uartParams.baudRate = 9600; // 9600 baud rate
     uartParams.dataLength = UART_LEN_8; // 8
@@ -209,6 +242,7 @@ Void uartTaskFxn(UArg arg0, UArg arg1) {
         System_abort("Error opening the UART");
     }
 
+    int i = 0; //Indeksilaskuri UART:lta luetuilta viesteiltä
     while (1) {
         if (programState == SEND_UART)  {
             char code[20];
@@ -241,30 +275,38 @@ Void uartTaskFxn(UArg arg0, UArg arg1) {
                 //Tilanvaihto
                 programState = WAITING;
             }
+        } else if (programState == READ_UART)  {
+            //int i = 0;
+            char input;
+            //char tallennus[100];
+            //int j = 0;
+            while(programState == READ_UART)     {
+                // Vastaanotetaan 1 merkki kerrallaan input-muuttujaan
+                UART_read(uart, &input, 1);
+                ///joka kolmas merkki on viesti(. tai -) jakojäännös x % 3 = 0
+                if( (i % 3) == 0 ) {
+                    //tallennus[j] = input;
+                    //System_printf("saatu merkki %c\n", input);
+                    //System_flush();
+                    //Viesti talteen globaaliin muuttujaan
+                    message = input;
+                    //Tilanvaihto buzzerille/ledille
+                    programState = BUZZER_READ;
+                    //j++;
+                }
+                i++;
+            }
+
         }
-        Task_sleep(100000 / Clock_tickPeriod);
+        if(programState == BUZZER_READ) {
+            //Sleep 1ms. Vastaanottaessa dataa UART:lta paljon pienempi sleep
+            Task_sleep(1000 / Clock_tickPeriod);
+        }else {
+            //Sleep 100ms
+            Task_sleep(100000 / Clock_tickPeriod);
+        }
     }
 
-}
-
-// Funktio summerin kontrollointiin
-// TODO: Integrointi muuhun ohjelmaan
-Void buzzerController(char signal) {
-    if (signal == '.') {
-        // Piste: Lyhyt piippaus
-        PIN_setOutputValue(buzzerHandle, BUZZER_PIN, 1); // Summeri päälle
-        Task_sleep(DOT_DURATION * (1000 / Clock_tickPeriod));
-        PIN_setOutputValue(buzzerHandle, BUZZER_PIN, 0); // Summeri offille
-    } else if (signal == '-') {
-        // Viiva: Pitkä piippaus
-        PIN_setOutputValue(buzzerHandle, BUZZER_PIN, 1); // Summeri päälle
-        Task_sleep(LINE_DURATION * (1000 / Clock_tickPeriod));
-        PIN_setOutputValue(buzzerHandle, BUZZER_PIN, 0); // Summeri offille
-    } else if (signal == ' ') {
-        // Väli: "Hiljainen hetki"
-        PIN_setOutputValue(buzzerHandle, BUZZER_PIN, 0); // Varmistetaan, että summeri on offilla
-        Task_sleep(SPACE_DURATION * (1000 / Clock_tickPeriod));
-    }
 }
 
 Void MPUsensorFxn(UArg arg0, UArg arg1) {
@@ -391,8 +433,8 @@ Void moveTaskFxn(UArg arg0, UArg arg1) {
 
             if (delta_X > DEADZONE && fabs(delta_Y) < ELIMIT && fabs(delta_Z) < ELIMIT) {
                 //liike_x = true;
-                System_printf("Liike positiiviseen suuntaan x-akselilla\n");
-                System_flush();
+                //System_printf("Liike positiiviseen suuntaan x-akselilla\n");
+                //System_flush();
                 // Tallennetaan '-' globaalin muuttujaan ja tilamuutos
                 message = '-';
                 //Nollataan kiihtyvyysarvot currentSample-indeksissä alkuarvoon
@@ -402,8 +444,8 @@ Void moveTaskFxn(UArg arg0, UArg arg1) {
                 programState = BUZZER;
             } else if (delta_Y > DEADZONE && fabs(delta_X) < ELIMIT && fabs(delta_Z) < ELIMIT) {
                 //liike_y = true;
-                System_printf("Liike positiiviseen suuntaan y-akselilla\n");
-                System_flush();
+                //System_printf("Liike positiiviseen suuntaan y-akselilla\n");
+                //System_flush();
                 // Tallennetaan '.' globaalin muuttujaan ja tilamuutos
                 message = '.';
                 //Nollataan kiihtyvyysarvot currentSample-indeksissä alkuarvoon
@@ -413,8 +455,8 @@ Void moveTaskFxn(UArg arg0, UArg arg1) {
                 programState = BUZZER;
             } else if (delta_Z > (DEADZONE + 0.1) && fabs(delta_X) < (ELIMIT + 0.1) && fabs(delta_Y) < (ELIMIT + 0.1)) {
                 //liike_z = true;
-                System_printf("Liike positiiviseen suuntaan z-akselilla\n");
-                System_flush();
+                //System_printf("Liike positiiviseen suuntaan z-akselilla\n");
+                //System_flush();
                 // Tallennetaan ' ' globaalin muuttujaan ja tilamuutos
                 message = ' ';
                 //Nollataan kiihtyvyysarvot currentSample-indeksissä alkuarvoon
@@ -432,31 +474,21 @@ Void moveTaskFxn(UArg arg0, UArg arg1) {
     }
 }
 
-Void mainMenuTaskFxn(UArg arg0, UArg arg1) {
-    //char userInput;
-
-    while (1) {
-        //System_printf("=== Main Menu ===\n");
-        Task_sleep(100000 / Clock_tickPeriod);
-
-    }
-}
-
 void communicationTaskFxn(UArg arg0, UArg arg1) {
     //Toteutus
     while (1) {
-        if(programState == BUZZER) {
-            System_printf("CommunicationTask toteutus\n");
-            System_flush();
+        if(programState == BUZZER || programState == BUZZER_READ) {
+            //System_printf("CommunicationTask toteutus\n");
+            //System_flush();
             if (message == '.') {
                 // Piste: Lyhyt piippaus ja LED välähdys
-                System_printf("Piste\n");
-                System_flush();
+                //System_printf("Piste\n");
+                //System_flush();
                 // Summeri ja LED päälle
                 buzzerOpen(hBuzzer);
                 buzzerSetFrequency(2000);
                 //PIN_setOutputValue(buzzerHandle, BUZZER_PIN, 1);
-                PIN_setOutputValue(ledHandle, Board_LED0, 1);
+                PIN_setOutputValue(led0Handle, Board_LED0, 1);
 
                 // Odotetaan hetki
                 Task_sleep(DOT_DURATION / Clock_tickPeriod);
@@ -464,18 +496,23 @@ void communicationTaskFxn(UArg arg0, UArg arg1) {
                 // Sammutetaan summeri ja LED
                 //PIN_setOutputValue(buzzerHandle, BUZZER_PIN, 0);
                 buzzerClose();
-                PIN_setOutputValue(ledHandle, Board_LED0, 0);
+                PIN_setOutputValue(led0Handle, Board_LED0, 0);
                 //Tilanvaihto
-                programState = SEND_UART;
+                if(programState == BUZZER) {
+                    programState = SEND_UART;
+                }else if(programState == BUZZER_READ) {
+                    programState = READ_UART;
+                }
+
             } else if (message == '-') {
                 // Viiva: Pitkä piippaus ja LED välähdys
-                System_printf("Viiva\n");
-                System_flush();
+                //System_printf("Viiva\n");
+                //System_flush();
                 // Summeri ja LED päälle
                 buzzerOpen(hBuzzer);
                 buzzerSetFrequency(2000);
                 //PIN_setOutputValue(buzzerHandle, BUZZER_PIN, 1);
-                PIN_setOutputValue(ledHandle, Board_LED0, 1);
+                PIN_setOutputValue(led0Handle, Board_LED0, 1);
 
                 // Odotetaan hetki
                 Task_sleep(LINE_DURATION / Clock_tickPeriod);
@@ -483,18 +520,23 @@ void communicationTaskFxn(UArg arg0, UArg arg1) {
                 // Sammutetaan summeri ja LED
                 buzzerClose();
                 //PIN_setOutputValue(buzzerHandle, BUZZER_PIN, 0);
-                PIN_setOutputValue(ledHandle, Board_LED0, 0);
+                PIN_setOutputValue(led0Handle, Board_LED0, 0);
                 //Tilanvaihto
-                programState = SEND_UART;
+                if(programState == BUZZER) {
+                    programState = SEND_UART;
+                }else if(programState == BUZZER_READ) {
+                    programState = READ_UART;
+                }
+
             } else if (message == ' ') {
                 // Väli: Pitkä piippaus korkeammalla taajuudella
-                System_printf("Välilyönti\n");
-                System_flush();
+                //System_printf("Välilyönti\n");
+                //System_flush();
                 // Summeri ja LED päälle
                 buzzerOpen(hBuzzer);
                 buzzerSetFrequency(5000);
                 //PIN_setOutputValue(buzzerHandle, BUZZER_PIN, 1);
-                PIN_setOutputValue(ledHandle, Board_LED0, 1);
+                PIN_setOutputValue(led0Handle, Board_LED0, 1);
 
                 // Odotetaan hetki
                 Task_sleep(SPACE_DURATION / Clock_tickPeriod);
@@ -502,28 +544,40 @@ void communicationTaskFxn(UArg arg0, UArg arg1) {
                 // Sammutetaan summeri ja LED
                 buzzerClose();
                 //PIN_setOutputValue(buzzerHandle, BUZZER_PIN, 0);
-                PIN_setOutputValue(ledHandle, Board_LED0, 0);
+                PIN_setOutputValue(led0Handle, Board_LED0, 0);
                 //Tilanvaihto
-                programState = SEND_UART;
+                if(programState == BUZZER) {
+                    programState = SEND_UART;
+                }else if(programState == BUZZER_READ) {
+                    programState = READ_UART;
+                }
             } else {
                 System_printf("Ei oikeaa merkkiä\n");
                 System_flush();
                 //Resetoidaan char message
                 message = 'a';
                 //Tilanvaihto
-                programState = WAITING;
+                if(programState == BUZZER) {
+                    programState = WAITING;
+                } else if(programState == BUZZER_READ) {
+                    programState = READ_UART;
+                }
             }
         }
-        //Sleep 1000ms
-        Task_sleep(100000 / Clock_tickPeriod);
+
+        if(programState == READ_UART) {
+            //Sleep 1ms. Vastaanottaessa dataa UART:lta paljon pienempi sleep
+            Task_sleep(1000 / Clock_tickPeriod);
+        }else {
+            //Sleep 100ms
+            Task_sleep(100000 / Clock_tickPeriod);
+        }
     }
 }
 
 Int main(void) {
 
     // Task variables
-    //Task_Handle sensorTaskHandle;
-    //Task_Params sensorTaskParams;
     Task_Handle uartTaskHandle;
     Task_Params uartTaskParams;
     Task_Handle mpuTask;
@@ -532,38 +586,40 @@ Int main(void) {
     Task_Params moveTaskParams;
     Task_Handle communicationTaskHandle;
     Task_Params communicationTaskParams;
-    Task_Handle mainMenuTaskHandle;
-    Task_Params mainMenuTaskParams;
+    Task_Handle menuTaskHandle;
+    Task_Params menuTaskParams;
 
     // Initialize board
     Board_initGeneral();
 
     // Otetaan pinnit käyttöön ohjelmassa
-    buttonHandle = PIN_open(&buttonState, buttonConfig);
-    if(!buttonHandle) {
-       System_abort("Error initializing button pins\n");
+    button0Handle = PIN_open(&button0State, button0Config);
+    if(!button0Handle) {
+    System_abort("Error initializing button0 pins\n");
     }
-    ledHandle = PIN_open(&ledState, ledConfig);
-    if(!ledHandle) {
-       System_abort("Error initializing LED pins\n");
+    // Otetaan pinnit käyttöön ohjelmassa
+    button1Handle = PIN_open(&button1State, button1Config);
+    if(!button1Handle) {
+    System_abort("Error initializing button1 pins\n");
     }
-
-    // Asetetaan painonappi-pinnille keskeytyksen käsittelijäksi, EI käytössä
+    led0Handle = PIN_open(&led0State, led0Config);
+    if(!led0Handle) {
+    System_abort("Error initializing LED pins\n");
+    }
+    led1Handle = PIN_open(&led1State, led1Config);
+    if(!led1Handle) {
+    System_abort("Error initializing LED pins\n");
+    }
+    // Asetetaan painonappi-pinnille keskeytyksen käsittelijäksi
     // funktio buttonFxn
-    //if (PIN_registerIntCb(buttonHandle, &buttonFxn) != 0) {
-    //   System_abort("Error registering button callback function");
-    //}
-    // JTKJ: Teht v  2. Ota i2c-v yl  k ytt  n ohjelmassa
-    // JTKJ: Exercise 2. Initialize i2c bus
-    Board_initI2C();
-    // JTKJ: Teht v  4. Ota UART k ytt  n ohjelmassa
-    // JTKJ: Exercise 4. Initialize UART
-    Board_initUART();
-
-    // JTKJ: Teht v  1. Ota painonappi ja ledi ohjelman k ytt  n
-    //       Muista rekister id  keskeytyksen k sittelij  painonapille
-    // JTKJ: Exercise 1. Open the button and led pins
-    //       Remember to register the above interrupt handler for button
+    if (PIN_registerIntCb(button0Handle, &button0Fxn) != 0) {
+    System_abort("Error registering button0 callback function");
+    }
+    // Asetetaan painonappi-pinnille keskeytyksen käsittelijäksi
+    // funktio buttonFxn
+    if (PIN_registerIntCb(button1Handle, &button1Fxn) != 0) {
+    System_abort("Error registering button1 callback function");
+    }
 
     // Open MPU power pin
     hMpuPin = PIN_open(&MpuPinState, MpuPinConfig);
@@ -571,27 +627,11 @@ Int main(void) {
         System_abort("Pin open failed!");
     }
 
-    // Open buzzer pin
-    //buzzerHandle = PIN_open(&buzzerState, buzzerConfig);
-    //if (!buzzerHandle) {
-    //    System_abort("Error initializing buzzer pin\n");
-    //}
-
     // Buzzer
     hBuzzer = PIN_open(&sBuzzer, cBuzzer);
     if (hBuzzer == NULL) {
       System_abort("Pin open failed!");
     }
-
-    // Mailbox buzzerTaskFxn
-    /*
-    Mailbox_Params mboxParams;
-    Mailbox_Params_init(&mboxParams);
-    mail_Buzzer = Mailbox_create(sizeof(msg_Buzzer), 10, &mboxParams, NULL);
-    if (mail_Buzzer == NULL) {
-        System_abort("Mailbox create failed!");
-    }
-    */
 
     /* Task Initializations */
 
@@ -607,7 +647,7 @@ Int main(void) {
     Task_Params_init(&moveTaskParams);
     moveTaskParams.stackSize = STACKSIZE;
     moveTaskParams.stack = &moveTaskStack;
-    moveTaskParams.priority=1;
+    moveTaskParams.priority=2;
     moveTaskHandle = Task_create(moveTaskFxn, &moveTaskParams, NULL);
     if (moveTaskHandle == NULL) {
         System_abort("Task create failed!");
@@ -631,18 +671,18 @@ Int main(void) {
         System_abort("Task create failed!");
     }
 
-    Task_Params_init(&mainMenuTaskParams);
-    mainMenuTaskParams.stackSize = STACKSIZE;
-    mainMenuTaskParams.stack = &mainMenuTaskStack;
-    mainMenuTaskParams.priority = 2;
-    mainMenuTaskHandle = Task_create(mainMenuTaskFxn, &mainMenuTaskParams, NULL);
-    if (mainMenuTaskHandle == NULL) {
+    Task_Params_init(&menuTaskParams);
+    menuTaskParams.stackSize = STACKSIZE;
+    menuTaskParams.stack = &mainMenuTaskStack;
+    menuTaskParams.priority = 2;
+    menuTaskHandle = Task_create(menuTaskFxn, &menuTaskParams, NULL);
+    if (menuTaskHandle == NULL) {
         System_abort("Task create failed!");
     }
 
     /* Sanity check */
-    System_printf("Hello world!\n");
-    System_flush();
+    //System_printf("Hello world!\n");
+    //System_flush();
 
     /* Start BIOS */
     BIOS_start();

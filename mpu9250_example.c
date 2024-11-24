@@ -121,7 +121,7 @@ Void sensorFxn(UArg arg0, UArg arg1) {
     uint32_t tickStart = 0;
     bool takeSamples = true;
     while (takeSamples) {
-        if(j >= 10) {
+        if(j >= 40) {
             takeSamples = false;
         }
         // MPU ask data
@@ -158,16 +158,19 @@ Void sensorFxn(UArg arg0, UArg arg1) {
         // Sleep 100ms
         Task_sleep(100000 / Clock_tickPeriod);
         j++;
+        if(j >= 40) {
+            takeSamples = false;
+        }
     }
     //printtaus taulukosta
-    printf("printtaus taulukosta tarkistuksena \n");
-    int i = 0;
-    for(i = 0; i < 10 ; i++) {
-        //printf("accel.ax: %f\n", samples[i].accel.ax);
-        printf("%u, %.2f, %.2f, %.2f, %.2f, %.2f, %.2f\n", samples[i].timestamp, samples[i].accel.ax, samples[i].accel.ay, samples[i].accel.az,
-               samples[i].gyro.gx, samples[i].gyro.gy, samples[i].gyro.gz);
+    //printf("printtaus taulukosta tarkistuksena \n");
+    //int i = 0;
+    //for(i = 0; i < 10 ; i++) {
+    //    //printf("accel.ax: %f\n", samples[i].accel.ax);
+    //    printf("%u, %.2f, %.2f, %.2f, %.2f, %.2f, %.2f\n", samples[i].timestamp, samples[i].accel.ax, samples[i].accel.ay, samples[i].accel.az,
+    //           samples[i].gyro.gx, samples[i].gyro.gy, samples[i].gyro.gz);
 
-    }
+    //}
 
     // Program never gets here..
     // MPU close i2c
